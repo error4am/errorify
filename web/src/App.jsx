@@ -19,7 +19,8 @@ function backendUrl(path = "/api/chat") {
   }
   // fallback: try local proxy for dev, then mock path
   // NOTE: if you want to force a specific URL for quick testing, replace below.
-  return "/api/chat-mock"; // safe mock that the server provides
+  return "http://localhost:3001/api/chat";
+
 }
 
 export default function App() {
