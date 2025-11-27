@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-
+const BACKEND = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
 export default function App() {
   const [open, setOpen] = useState(false);
   const [conversation, setConversation] = useState([
@@ -31,11 +31,16 @@ export default function App() {
       // dev: this calls your proxy at localhost:3001.
       // If you don't have a backend yet, this will error — that's fine while styling.
       const payload = { messages: [...conversation, { role: "user", content: text }] };
-      const res = await fetch("http://localhost:3001/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
+     const res = await fetch(`${BACKEND}/api/chat`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    // if you're using BOT_PASSWORD and want the frontend to send it automatically:
+    // "x-errorify-password": sessionStorage.getItem("errorify_pw") || ""
+  },
+  body: JSON.stringify(payload)
+});
+
 
       if (!res.ok) {
         const t = await res.text();
