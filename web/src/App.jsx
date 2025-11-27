@@ -1,5 +1,27 @@
+// web/src/App.jsx
 import { useState, useEffect, useRef } from "react";
-const BACKEND = import.meta.env.VITE_BACKEND_URL || "http://localhost:3001";
+
+/**
+ * Backend resolution:
+ * - VITE_BACKEND_URL is read at build time by Vite.
+ * - If empty, this file will fall back to the mock endpoint on the same host:
+ *   - For local dev you should use http://localhost:3001 or your server.
+ *   - For production, set VITE_BACKEND_URL to your Render URL (https://...).
+ */
+const BACKEND = import.meta.env.VITE_BACKEND_URL || "";
+console.log("▶ BACKEND (build-time VITE_BACKEND_URL):", BACKEND);
+
+// helper: build final url for a path
+function backendUrl(path = "/api/chat") {
+  if (BACKEND && BACKEND !== "") {
+    // remove trailing slash on BACKEND and append path
+    return BACKEND.replace(/\/$/, "") + path;
+  }
+  // fallback: try local proxy for dev, then mock path
+  // NOTE: if you want to force a specific URL for quick testing, replace below.
+  return "/api/chat-mock"; // safe mock that the server provides
+}
+
 export default function App() {
   const [open, setOpen] = useState(false);
   const [conversation, setConversation] = useState([
@@ -7,12 +29,13 @@ export default function App() {
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [errorBanner, setErrorBanner] = useState(""); // show network/server errors
   const messagesRef = useRef(null);
 
   useEffect(() => {
-    // small welcome message after mount
+    // small welcome message
     setTimeout(() => {
-      setConversation(prev => [...prev, { role: "assistant", content: "Hello — I'm Errorify. How can I help you today?" }]);
+      setConversation(prev => [...prev, { role: "assistant", content: "Hello — I’m Errorify. How can I help you today?" }]);
     }, 120);
   }, []);
 
@@ -20,38 +43,59 @@ export default function App() {
     if (messagesRef.current) messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
   }, [conversation, open, loading]);
 
+  // helper to append message locally
+  function append(role, text) {
+    setConversation(prev => [...prev, { role, content: text }]);
+  }
+
   async function sendMessage() {
+    setErrorBanner("");
     const text = input.trim();
     if (!text) return;
-    setConversation(prev => [...prev, { role: "user", content: text }]);
+    append("user", text);
     setInput("");
     setLoading(true);
 
+    const payload = { messages: [...conversation, { role: "user", content: text }] };
+
     try {
-      // dev: this calls your proxy at localhost:3001.
-      // If you don't have a backend yet, this will error — that's fine while styling.
-      const payload = { messages: [...conversation, { role: "user", content: text }] };
-     const res = await fetch(`${BACKEND}/api/chat`, {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    // if you're using BOT_PASSWORD and want the frontend to send it automatically:
-    // "x-errorify-password": sessionStorage.getItem("errorify_pw") || ""
-  },
-  body: JSON.stringify(payload)
-});
+      const url = backendUrl("/api/chat");
+      // prepare headers
+      const headers = { "Content-Type": "application/json" };
+      const pw = sessionStorage.getItem("errorify_pw");
+      if (pw) headers["x-errorify-password"] = pw;
 
+      const res = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(payload),
+        // keep credentials false unless you explicitly use cookies
+      });
 
+      // If no response (network-level), fetch will throw; otherwise we inspect response
       if (!res.ok) {
-        const t = await res.text();
-        setConversation(prev => [...prev, { role: "assistant", content: "Error: " + t }]);
+        // try parse JSON error body
+        const textBody = await res.text();
+        let errMsg = textBody || `Request failed: ${res.status}`;
+        // If server returned HTML (like Vercel's 404 html), display short message
+        if (errMsg.trim().startsWith("<!DOCTYPE") || errMsg.trim().startsWith("<html")) {
+          errMsg = `Server error (HTML response). Check backend URL.`;
+        } else {
+          try {
+            const json = JSON.parse(textBody);
+            if (json?.error?.message) errMsg = json.error.message;
+            else if (json?.error) errMsg = JSON.stringify(json.error);
+          } catch (e) { /* not JSON */ }
+        }
+        append("assistant", `Error: ${errMsg}`);
+        setErrorBanner(errMsg);
         setLoading(false);
         return;
       }
 
+      // parse provider response (try common shapes)
       const data = await res.json();
       let assistantText = "";
-
       if (data.choices && data.choices[0] && data.choices[0].message) {
         assistantText = data.choices[0].message.content;
       } else if (data.output) {
@@ -59,13 +103,15 @@ export default function App() {
       } else if (data.result) {
         assistantText = data.result;
       } else {
-        assistantText = JSON.stringify(data);
+        assistantText = (data?.choices && JSON.stringify(data)) || JSON.stringify(data);
       }
 
-      setConversation(prev => [...prev, { role: "assistant", content: assistantText }]);
+      append("assistant", assistantText);
     } catch (err) {
-      // while styling, network errors are okay — we still show the UI
-      setConversation(prev => [...prev, { role: "assistant", content: "Network error: " + err.message }]);
+      // network or unexpected error
+      const msg = err?.message || String(err);
+      append("assistant", `Network error: ${msg}`);
+      setErrorBanner(msg);
     } finally {
       setLoading(false);
     }
@@ -99,6 +145,21 @@ export default function App() {
             <div className="chat-header">
               <div id="chatTitle" className="title">Errorify — Assistant</div>
               <button className="close-btn" onClick={() => setOpen(false)} title="Close chat">✕</button>
+            </div>
+
+            <div style={{ padding: "6px 18px 0 18px" }}>
+              {errorBanner && (
+                <div style={{
+                  background: "linear-gradient(90deg,#3b2b2b,#2b3136)",
+                  color: "#ffd3d3",
+                  padding: "8px 12px",
+                  borderRadius: 8,
+                  marginBottom: 10,
+                  fontSize: 13
+                }}>
+                  {`Error: ${errorBanner}`}
+                </div>
+              )}
             </div>
 
             <div className="messages" ref={messagesRef}>
