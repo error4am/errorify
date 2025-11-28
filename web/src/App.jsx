@@ -1,13 +1,24 @@
 // web/src/App.jsx
 import { useState, useEffect, useRef } from "react";
 
-/* Backend base from Vite env (baked at build time) */
-const BACKEND = import.meta.env.VITE_BACKEND_URL || "";
-console.log("▶ BACKEND (build-time):", BACKEND);
+/**
+ * Backend config:
+ * - Prefer VITE_BACKEND_URL (set in Vercel for production/preview or in local env for dev).
+ * - Fallback to the deployed Render URL (replace if you used a different one).
+ */
+const BACKEND = import.meta.env.VITE_BACKEND_URL || "https://errorify.onrender.com";
+console.log("▶ BACKEND (build-time VITE_BACKEND_URL or fallback):", BACKEND);
 
+/** Build a full fetch URL for API paths. */
 function backendUrl(path = "/api/chat") {
-  if (BACKEND && BACKEND !== "") return BACKEND.replace(/\/$/, "") + path;
-  // safe mock when backend not configured
+  if (BACKEND && BACKEND !== "") {
+    return BACKEND.replace(/\/$/, "") + path;
+  }
+  // Local dev fallback (rare): hit local server
+  if (typeof window !== "undefined" && window.location.hostname === "localhost") {
+    return "http://localhost:3001" + path;
+  }
+  // Safe mock in worst-case (shouldn't happen with BACKEND fallback above)
   return "/api/chat-mock";
 }
 
@@ -17,9 +28,8 @@ function timeNow() {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-/* streaming helper: simulate client-side streaming by slicing text into chunks */
-function simulateStreaming(text, onChunk, speed = 30) {
-  // split by words and gradually emit
+/* streaming helper: simulate incremental display by tokens */
+function simulateStreaming(text, onChunk, speed = 22) {
   const tokens = text.split(/(\s+)/);
   let i = 0;
   let cancelled = false;
@@ -27,7 +37,6 @@ function simulateStreaming(text, onChunk, speed = 30) {
     while (i < tokens.length && !cancelled) {
       onChunk(tokens[i]);
       i++;
-      // pacing: small delay per token
       await new Promise(r => setTimeout(r, speed));
     }
   }
@@ -54,7 +63,6 @@ export default function App() {
 
   function appendMessage(role, content, meta = {}) {
     setConversation(prev => [...prev, { role, content, ts: timeNow(), ...meta }]);
-    // small visual delay
     setTimeout(() => {
       if (messagesRef.current) messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
     }, 80);
@@ -84,8 +92,7 @@ export default function App() {
 
       if (!res.ok) {
         const body = await res.text();
-        // handle HTML error responses gracefully
-        const msg = body.trim().startsWith("<") ? "Server responded with an HTML error. Check backend URL." : body;
+        const msg = body.trim().startsWith("<") ? "Server returned an HTML error. Check backend URL." : body;
         appendMessage("assistant", `Error: ${msg}`);
         setErrorBanner(msg);
         setLoading(false);
@@ -94,23 +101,22 @@ export default function App() {
 
       const data = await res.json();
 
-      // attempt to extract assistant text
+      // extract assistant text from common shapes
       let assistantText = "";
       if (data.choices && data.choices[0] && data.choices[0].message) assistantText = data.choices[0].message.content;
       else if (data.output) assistantText = typeof data.output === "string" ? data.output : (data.output[0] ?? JSON.stringify(data.output));
       else if (data.result) assistantText = data.result;
       else assistantText = JSON.stringify(data);
 
-      // STREAMING: simulate incremental token-by-token streaming client-side
+      // Simulated streaming
       setStreaming(true);
       let buffer = "";
       appendMessage("assistant", ""); // placeholder bubble
+
       const cancel = simulateStreaming(assistantText, (chunk) => {
         buffer += chunk;
-        // update the last assistant message
         setConversation(prev => {
           const copy = [...prev];
-          // find last assistant msg index
           const idx = copy.map(m => m.role).lastIndexOf("assistant");
           if (idx >= 0) {
             copy[idx] = { ...copy[idx], content: buffer, ts: copy[idx].ts || timeNow() };
@@ -119,7 +125,7 @@ export default function App() {
           }
           return copy;
         });
-      }, 22); // speed (lower = faster)
+      }, 20);
 
       setStreamCancel(() => () => {
         cancel();
@@ -127,25 +133,20 @@ export default function App() {
         setStreamCancel(null);
       });
 
-      // when simulation completes, we set streaming false after small pause
-      // But because simulateStreaming is opaque, we stop it via the cancel closure above
-      // We'll set streaming false after 600ms if not canceled
+      // fallback end of streaming state (safety)
       setTimeout(() => {
-        if (streaming) {
-          setStreaming(false);
-          setStreamCancel(null);
-        }
-      }, Math.max(600, Math.min(assistantText.length * 12, 3000)));
+        setStreaming(false);
+        setStreamCancel(null);
+      }, Math.max(600, Math.min(assistantText.length * 12, 4000)));
 
     } catch (err) {
-      appendMessage("assistant", `Network error: ${err?.message ?? err}`);
+      appendMessage("assistant", `Network error: ${err?.message ?? String(err)}`);
       setErrorBanner(err?.message ?? "Network error");
     } finally {
       setLoading(false);
     }
   }
 
-  // stop streaming early (user pressed stop)
   function stopStream() {
     if (streamCancel) {
       streamCancel();
